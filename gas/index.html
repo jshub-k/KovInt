@@ -206,8 +206,13 @@ a{color:var(--info)}
 .newbox input{flex:1;min-width:220px;background:var(--surface);border:1px solid var(--line);border-radius:9px;padding:9px 11px;color:var(--fg);font:inherit;outline:0}
 .newbox label{color:var(--fg-2);font-size:12.5px;width:100%}
 .dlist{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px}
-.dcard{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:10px;text-align:left;cursor:pointer}
+.dcard{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:10px;text-align:left;cursor:pointer;position:relative}
 .dcard:hover{border-color:var(--hover-line)}
+.dcard.sel{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 8%,var(--surface))}
+.dsel{position:absolute;top:10px;right:10px;cursor:pointer;z-index:1}
+.dsel input[type=checkbox]{width:17px;height:17px;cursor:pointer;accent-color:var(--accent)}
+.dl-batch-bar{display:none;align-items:center;gap:10px;margin-bottom:12px;padding:10px 14px;background:color-mix(in srgb,var(--accent) 10%,var(--surface));border:1px solid var(--accent);border-radius:10px;flex-wrap:wrap}
+.dl-batch-bar span{font-size:13px;font-weight:600;color:var(--accent);flex:1;min-width:0}
 .dcard .row{display:flex;align-items:center;gap:8px}
 .st{font-size:10.5px;font-weight:600;padding:2px 8px;border-radius:999px;margin-left:auto}
 .st.draft{background:color-mix(in srgb,var(--warn) 14%,transparent);color:var(--warn)}
