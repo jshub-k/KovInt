@@ -12,6 +12,11 @@ function doGet(e) {
     .addMetaTag("viewport", "width=device-width, initial-scale=1, viewport-fit=cover");
 }
 
+/** Inclui um arquivo .html como string (necessário para <?!= include("Shim") ?>). */
+function include(filename) {
+  return HtmlService.createHtmlOutputFromFile(filename).getContent();
+}
+
 /** Config pública: retorna tokens que o cliente precisa antes de autenticar. */
 function gasGetConfig() {
   const p = PropertiesService.getScriptProperties();
