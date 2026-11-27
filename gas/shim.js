@@ -1,0 +1,254 @@
+/**
+ * claude-shim-gas.js  –  KovInt Google Apps Script
+ *
+ * Implementa window.claude.use() usando:
+ *   - google.script.run  → MCP (Metabase/Gmail/Sheets), sample, user
+ *   - Supabase JS (CDN)  → db, assets
+ *   - browser            → downloads
+ */
+(function () {
+  "use strict";
+
+  /* ── Promise wrapper para google.script.run ─────────────────────── */
+  function gasRun(fn, ...args) {
+    return new Promise((resolve, reject) => {
+      google.script.run
+        .withSuccessHandler(resolve)
+        .withFailureHandler(e => reject(new Error(e.message || String(e))))
+        [fn](...args);
+    });
+  }
+
+  /* ── Config e Supabase ───────────────────────────────────────────── */
+  let _cfg = null;
+  let _sb  = null;
+  let _gasUser = null;
+
+  async function loadConfig() {
+    if (_cfg) return _cfg;
+    _cfg = await gasRun("gasGetConfig");
+    return _cfg;
+  }
+
+  async function getSb() {
+    if (_sb) return _sb;
+    const cfg = await loadConfig();
+    if (!cfg.supabase_url || !cfg.supabase_anon_key) {
+      throw new Error("Supabase não configurado nas Script Properties.");
+    }
+    _sb = window.supabase.createClient(cfg.supabase_url, cfg.supabase_anon_key);
+    return _sb;
+  }
+
+  /* ── Tiles hook ──────────────────────────────────────────────────── */
+  loadConfig().then(cfg => {
+    if (cfg.mapbox_token) {
+      window.KOVINT_TILES = {
+        url: `https://api.mapbox.com/styles/v1/mapbox/dark-v11/tiles/{z}/{x}/{y}?access_token=${cfg.mapbox_token}`,
+        maxZoom: 20,
+        tileSize: 512,
+        zoomOffset: -1,
+        attribution: "© <a href='https://www.mapbox.com/about/maps/'>Mapbox</a>",
+      };
+    }
+  }).catch(() => {});
+
+  /* ── db (Supabase) ───────────────────────────────────────────────── */
+  function makeDb(sb) {
+    function colRef(col) {
+      let _filters = [], _orderBy = null, _limit = null;
+
+      function buildQuery() {
+        let q = sb.from("docs").select("*").eq("collection", col);
+        for (const [f, op, v] of _filters) {
+          if      (op === "==") q = q.eq(`data->>'${f}'`, v);
+          else if (op === ">=") q = q.gte(`data->>'${f}'`, v);
+          else if (op === "<=") q = q.lte(`data->>'${f}'`, v);
+          else if (op === "!=") q = q.neq(`data->>'${f}'`, v);
+        }
+        if (_orderBy) q = q.order(`data->>'${_orderBy[0]}'`, { ascending: _orderBy[1] !== "desc" });
+        if (_limit)   q = q.limit(_limit);
+        return q;
+      }
+
+      const ref = {
+        where(f, op, v)  { _filters.push([f, op, v]); return ref; },
+        orderBy(f, dir)  { _orderBy = [f, dir]; return ref; },
+        limit(n)         { _limit = n; return ref; },
+        doc(id)          { return docRef(col, id); },
+
+        async get() {
+          const { data, error } = await buildQuery();
+          if (error) throw error;
+          return { docs: (data||[]).map(r => ({ id: r.id, exists: true, data: () => r.data||{} })) };
+        },
+
+        onSnapshot(cb) {
+          buildQuery().then(({ data }) =>
+            cb({ docs: (data||[]).map(r => ({ id: r.id, exists: true, data: () => r.data||{} })), docChanges: ()=>[] })
+          );
+          const ch = sb.channel(`col-${col}`)
+            .on("postgres_changes", { event: "*", schema: "public", table: "docs", filter: `collection=eq.${col}` }, () => {
+              buildQuery().then(({ data }) =>
+                cb({ docs: (data||[]).map(r => ({ id: r.id, exists: true, data: () => r.data||{} })), docChanges: ()=>[] })
+              );
+            }).subscribe();
+          return () => sb.removeChannel(ch);
+        },
+      };
+      return ref;
+    }
+
+    function docRef(col, id) {
+      return {
+        async get() {
+          const { data, error } = await sb.from("docs").select("*").eq("collection", col).eq("id", id).maybeSingle();
+          if (error) throw error;
+          if (!data) return { exists: false, id, data: ()=>({}) };
+          return { exists: true, id: data.id, data: ()=>data.data||{} };
+        },
+        async set(payload) {
+          const uid = _gasUser?.id || null;
+          const { error } = await sb.from("docs").upsert(
+            { collection: col, id, data: payload, updated_at: new Date().toISOString(), updated_by: uid },
+            { onConflict: "collection,id" }
+          );
+          if (error) throw error;
+        },
+        async update(payload) {
+          const { data: ex } = await sb.from("docs").select("data").eq("collection", col).eq("id", id).maybeSingle();
+          const merged = Object.assign({}, ex?.data||{}, payload);
+          const uid = _gasUser?.id || null;
+          const { error } = await sb.from("docs").upsert(
+            { collection: col, id, data: merged, updated_at: new Date().toISOString(), updated_by: uid },
+            { onConflict: "collection,id" }
+          );
+          if (error) throw error;
+        },
+        async delete() {
+          const { error } = await sb.from("docs").delete().eq("collection", col).eq("id", id);
+          if (error) throw error;
+        },
+        onSnapshot(cb) {
+          sb.from("docs").select("*").eq("collection", col).eq("id", id).maybeSingle()
+            .then(({ data }) => data
+              ? cb({ exists: true,  id: data.id, data: ()=>data.data||{} })
+              : cb({ exists: false, id, data: ()=>({}) })
+            );
+          const ch = sb.channel(`doc-${col}-${id}`)
+            .on("postgres_changes", { event: "*", schema: "public", table: "docs",
+                filter: `collection=eq.${col}` }, () => {
+              sb.from("docs").select("*").eq("collection", col).eq("id", id).maybeSingle()
+                .then(({ data }) => data
+                  ? cb({ exists: true,  id: data.id, data: ()=>data.data||{} })
+                  : cb({ exists: false, id, data: ()=>({}) })
+                );
+            }).subscribe();
+          return () => sb.removeChannel(ch);
+        },
+      };
+    }
+
+    return { collection(name) { return colRef(name); } };
+  }
+
+  /* ── assets (Supabase Storage) ──────────────────────────────────── */
+  function makeAssets(sb) {
+    return {
+      async upload(path, blob) {
+        const { error } = await sb.storage.from("documentos").upload(path, blob, { upsert: true });
+        if (error) throw error;
+        return { path };
+      },
+      async list(prefix) {
+        const { data, error } = await sb.storage.from("documentos").list(prefix||"");
+        if (error) throw error;
+        return data||[];
+      },
+      async delete(path) {
+        const { error } = await sb.storage.from("documentos").remove([path]);
+        if (error) throw error;
+      },
+      url(path) {
+        return sb.storage.from("documentos").getPublicUrl(path).data.publicUrl;
+      },
+    };
+  }
+
+  /* ── mcp (via google.script.run) ────────────────────────────────── */
+  function makeMcp() {
+    return {
+      async callTool(server, tool, input, _opts) {
+        try {
+          const result = await gasRun("gasCallMcp", server, tool, input);
+          return { payload: result };
+        } catch (e) {
+          throw Object.assign(e, { code: "tool_error" });
+        }
+      },
+    };
+  }
+
+  /* ── sample (Anthropic via google.script.run) ───────────────────── */
+  function makeSample() {
+    return {
+      async createMessage(params) {
+        return gasRun("gasCallSample", params);
+      },
+    };
+  }
+
+  /* ── user (GAS Session) ─────────────────────────────────────────── */
+  function makeUser() {
+    return {
+      async me() {
+        if (_gasUser) return _gasUser;
+        _gasUser = await gasRun("gasGetUser");
+        return _gasUser;
+      },
+      async name() {
+        const u = await this.me();
+        return u?.name || u?.email || null;
+      },
+      async profiles() { return []; },
+      canEdit() { return true; }, // GAS: acesso garantido pelo domínio
+    };
+  }
+
+  /* ── downloads ──────────────────────────────────────────────────── */
+  function makeDownloads() {
+    return {
+      async save({ filename, data }) {
+        const url = URL.createObjectURL(data instanceof Blob ? data : new Blob([data]));
+        const a = Object.assign(document.createElement("a"), { href: url, download: filename || "download" });
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1000);
+      },
+    };
+  }
+
+  /* ── window.claude.use ──────────────────────────────────────────── */
+  const _cache = {};
+  window.claude = window.claude || {};
+  window.claude.use = async function (capability) {
+    if (_cache[capability]) return _cache[capability];
+    let cap;
+    switch (capability) {
+      case "db":        cap = makeDb(await getSb());     break;
+      case "assets":    cap = makeAssets(await getSb()); break;
+      case "mcp":       cap = makeMcp();                 break;
+      case "sample":    cap = makeSample();              break;
+      case "user":      cap = makeUser();                break;
+      case "downloads": cap = makeDownloads();           break;
+      case "comments":  cap = { async post(){}, async list(){ return []; } }; break;
+      default:
+        throw Object.assign(new Error(`capability '${capability}' indisponível`), { code: "capability_disabled" });
+    }
+    _cache[capability] = cap;
+    return cap;
+  };
+
+  /* pré-carrega o usuário para o kovint.html não precisar esperar */
+  makeUser().me().catch(() => {});
+})();
