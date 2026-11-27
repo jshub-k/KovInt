@@ -5,11 +5,7 @@
  */
 
 function doGet(e) {
-  const shim  = HtmlService.createHtmlOutputFromFile("Shim").getContent();
-  let content = HtmlService.createHtmlOutputFromFile("index").getContent();
-  // substituição manual do scriptlet <?!= include("Shim") ?>
-  content = content.replace('<?!= include("Shim") ?>', shim);
-  return HtmlService.createHtmlOutput(content)
+  return HtmlService.createHtmlOutputFromFile("index")
     .setTitle("KovInt")
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
     .addMetaTag("viewport", "width=device-width, initial-scale=1, viewport-fit=cover");
