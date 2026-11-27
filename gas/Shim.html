@@ -234,15 +234,14 @@
   window.claude = window.claude || {};
   window.claude.use = async function (capability) {
     if (_cache[capability]) return _cache[capability];
-    const sb = await getSb();
     let cap;
     switch (capability) {
-      case "db":        cap = makeDb(sb);       break;
-      case "assets":    cap = makeAssets(sb);   break;
-      case "mcp":       cap = makeMcp();        break;
-      case "sample":    cap = makeSample();     break;
-      case "user":      cap = makeUser();       break;
-      case "downloads": cap = makeDownloads();  break;
+      case "db":        cap = makeDb(await getSb());     break;
+      case "assets":    cap = makeAssets(await getSb()); break;
+      case "mcp":       cap = makeMcp();                 break;
+      case "sample":    cap = makeSample();              break;
+      case "user":      cap = makeUser();                break;
+      case "downloads": cap = makeDownloads();           break;
       case "comments":  cap = { async post(){}, async list(){ return []; } }; break;
       default:
         throw Object.assign(new Error(`capability '${capability}' indisponível`), { code: "capability_disabled" });
