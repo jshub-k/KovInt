@@ -5,17 +5,14 @@
  */
 
 function doGet(e) {
-  const tmpl = HtmlService.createTemplateFromFile("index");
-  return tmpl
-    .evaluate()
+  const shim  = HtmlService.createHtmlOutputFromFile("Shim").getContent();
+  let content = HtmlService.createHtmlOutputFromFile("index").getContent();
+  // substituição manual do scriptlet <?!= include("Shim") ?>
+  content = content.replace('<?!= include("Shim") ?>', shim);
+  return HtmlService.createHtmlOutput(content)
     .setTitle("KovInt")
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
     .addMetaTag("viewport", "width=device-width, initial-scale=1, viewport-fit=cover");
-}
-
-/** Inclui um arquivo .html como string (usado para modularizar scripts no template). */
-function include(filename) {
-  return HtmlService.createHtmlOutputFromFile(filename).getContent();
 }
 
 /** Config pública: retorna tokens que o cliente precisa antes de autenticar. */
