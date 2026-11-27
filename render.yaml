@@ -1,0 +1,31 @@
+services:
+  - type: web
+    name: kovint
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: METABASE_URL
+        value: https://metabase.kovi.com.br
+      - key: METABASE_SESSION_TOKEN
+        sync: false
+      - key: METABASE_DB_ID
+        value: "340"
+      - key: MAPBOX_TOKEN
+        sync: false
+      - key: GOOGLE_SA_JSON
+        sync: false   # path to mounted secret file
+      - key: GOOGLE_SA_SUBJECT
+        sync: false   # service account impersonation email
+      - key: ALLOWED_DOMAIN
+        value: kovi.com.br
+    healthCheckPath: /auth/config
