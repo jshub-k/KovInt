@@ -1074,15 +1074,47 @@ let batchSel=new Set();
 function renderBatchBar(){let bar=$("dlBatchBar");if(!bar){bar=document.createElement("div");bar.id="dlBatchBar";bar.className="dl-batch-bar";bar.innerHTML='<span id="dlBatchCount"></span><button type="button" class="btn" id="dlBatchAll">Selecionar todos</button><button type="button" class="btn" id="dlBatchNone">Limpar seleção</button><button type="button" class="btn pri" id="dlBatchExport"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11m0 0-4-4m4 4 4-4M5 20h14"/></svg>Exportar CSV</button>';const ref=$("dlist");ref.parentNode.insertBefore(bar,ref);bar.addEventListener("click",async e=>{if(e.target.closest("#dlBatchAll")){const all=Object.values(store).filter(d=>!dFilter||d.st===dFilter);batchSel=new Set(all.map(d=>d.id));renderList();return}if(e.target.closest("#dlBatchNone")){batchSel.clear();renderList();return}if(e.target.closest("#dlBatchExport")){await batchExportCsv([...batchSel]);batchSel.clear();renderList();return}})}
   bar.style.display=batchSel.size?"flex":"none";if(batchSel.size){const lbl=batchSel.size===1?"1 dossiê selecionado":`${batchSel.size} dossiês selecionados`;$("dlBatchCount").textContent=lbl}}
 async function batchExportCsv(ids){if(!ids.length)return;
-  const cv=v=>{const s=String(v==null?"":v).replace(/\r?\n/g," ").trim();return s.includes(",")||s.includes('"')||s.includes("\n")?'"'+s.replace(/"/g,'""')+'"':s};
-  const cols=[];SCHEMA.forEach(sec=>sec.b.forEach(blk=>{if(blk.f)blk.f.forEach(f=>{if(!cols.find(c=>c.k===f.k))cols.push({k:f.k,l:f.l})})}));
-  const header=["Placa","Data da perda","Status","Editado em",...cols.map(c=>c.l)].map(cv).join(",");
-  const rows=ids.filter(id=>store[id]).map(id=>{const d=store[id];const c=ctxFor(id);const st=d.st==="done"?"Concluído":"Em andamento";const upd=new Date(d.updated).toLocaleDateString("pt-BR",{timeZone:"America/Sao_Paulo"});return [c.plate,c.date,st,upd,...cols.map(col=>d.v[col.k]||"")].map(cv).join(",")});
-  const csv="﻿"+header+"\n"+rows.join("\n");
+  const cv=v=>{const s=String(v==null?"":v).replace(/\r?\n/g," ").trim();return s.includes(",")||s.includes('"')?'"'+s.replace(/"/g,'""')+'"':s};
+  /* --- build columns from SCHEMA --- */
+  const flatCols=[],fixedCols=[],dynTbls=[],checksFields=[];
+  SCHEMA.forEach(sec=>sec.b.forEach(blk=>{
+    if(blk.f)blk.f.forEach(f=>{if(f.k&&!flatCols.find(c=>c.k===f.k))flatCols.push({k:f.k,l:f.l})});
+    if(blk.tbl&&blk.fixed&&!blk.dyn){
+      const lbl=blk.h||blk.rowHead||blk.tbl;
+      blk.fixed.forEach((row,ri)=>{
+        if(typeof row[0]==="string"&&row[0].startsWith("#"))return;/* header separator row */
+        (blk.cols||[]).forEach((col,ci)=>{if(!col.calc&&!col.file)fixedCols.push({k:`${blk.tbl}.${ri}.${ci}`,l:`${lbl}: ${row[0]} · ${col.l}`})})});
+    }
+    if(blk.tbl&&blk.dyn)(dynTbls.find(t=>t.tbl===blk.tbl)||dynTbls[dynTbls.push({tbl:blk.tbl,l:blk.h||blk.tbl,cols:(blk.cols||[])})-1]);
+    if(blk.checks)checksFields.push({k:blk.checks,l:blk.l||blk.checks});
+  }));
+  /* --- header --- */
+  const metaH=["Placa","Data da perda","Status","% preenchido","Editado em","Editado por"];
+  const allH=[...metaH,...flatCols.map(c=>c.l),...fixedCols.map(c=>c.l),...checksFields.map(c=>c.l),...dynTbls.map(t=>t.l)];
+  /* --- rows --- */
+  const total=SCHEMA.reduce((n,s)=>n+s.b.reduce((m,b)=>m+(b.f?b.f.length:0),0),0);
+  const dataRows=ids.filter(id=>store[id]).map(id=>{
+    const d=store[id];const v=d.v||{};const ctx=ctxFor(id);
+    const filled=SCHEMA.reduce((n,s)=>n+s.b.reduce((m,b)=>m+(b.f?b.f.filter(f=>v[f.k]).length:0),0),0);
+    const pct=Math.round(filled/total*100)+"%";
+    const upd=new Date(d.updated).toLocaleDateString("pt-BR",{timeZone:"America/Sao_Paulo"});
+    const meta=[ctx.plate,ctx.date,d.st==="done"?"Concluído":"Em andamento",pct,upd,personName(d.updatedBy||"")];
+    const flat=flatCols.map(c=>v[c.k]||"");
+    const fixed=fixedCols.map(c=>v[c.k]||"");
+    const checks=checksFields.map(c=>(v[c.k]||"").split("|").filter(Boolean).join("; "));
+    const dyn=dynTbls.map(t=>{
+      const rmap={};Object.entries(v).forEach(([k,val])=>{const m=k.match(new RegExp(`^${t.tbl}\\.(\\d+)\\.(\\d+)$`));if(m){const ri=+m[1],ci=+m[2];(rmap[ri]=rmap[ri]||{})[ci]=val}});
+      const rks=Object.keys(rmap).map(Number).sort((a,b)=>a-b);if(!rks.length)return "";
+      return rks.map(ri=>t.cols.filter(c=>!c.file).map((c,ci)=>`${c.l}: ${rmap[ri][ci]||""}`).join(" | ")).join("; ")
+    });
+    return [...meta,...flat,...fixed,...checks,...dyn].map(cv).join(",");
+  });
+  const csv="﻿"+allH.map(cv).join(",")+"\n"+dataRows.join("\n");
   const blob=new Blob([csv],{type:"text/csv;charset=utf-8"});
+  const fname=`Dossies-${new Date().toISOString().slice(0,10)}.csv`;
   const dl=window.claude&&window.claude.use?await window.claude.use("downloads"):null;
-  if(dl){try{const name=`Dossies-${new Date().toISOString().slice(0,10)}.csv`;await dl.save({filename:name,data:blob});toast(`${rows.length} dossiê(s) exportados como CSV.`)}catch(err){if(err&&err.code==="declined")return;toast("Não foi possível salvar o CSV.")}}
-  else{const url=URL.createObjectURL(blob);const a=document.createElement("a");a.href=url;a.download=`Dossies-${new Date().toISOString().slice(0,10)}.csv`;a.click();setTimeout(()=>URL.revokeObjectURL(url),5000);toast(`${rows.length} dossiê(s) exportados como CSV.`)}}
+  if(dl){try{await dl.save({filename:fname,data:blob});toast(`${dataRows.length} dossiê(s) exportados como CSV.`)}catch(err){if(err&&err.code==="declined")return;toast("Não foi possível salvar o CSV.")}}
+  else{const url=URL.createObjectURL(blob);const a=document.createElement("a");a.href=url;a.download=fname;a.click();setTimeout(()=>URL.revokeObjectURL(url),5000);toast(`${dataRows.length} dossiê(s) exportados como CSV.`)}}
 function renderList(){
   const all=Object.values(store);const ds=all.filter(d=>!dFilter||d.st===dFilter).sort((a,b)=>b.updated-a.updated);
   $("dcount").textContent=`${all.length} dossiê${all.length===1?"":"s"} · ${all.filter(d=>d.st==="done").length} concluído${all.filter(d=>d.st==="done").length===1?"":"s"}`;
