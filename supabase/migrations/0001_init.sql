@@ -4,7 +4,10 @@
 -- =====================================================================
 
 -- ── perfis ────────────────────────────────────────────────────────────
-create type if not exists public.papel as enum ('viewer','contributor','editor','admin','owner');
+do $$ begin
+  create type public.papel as enum ('viewer','contributor','editor','admin','owner');
+exception when duplicate_object then null;
+end $$;
 
 create table if not exists public.profiles (
   id         uuid primary key references auth.users (id) on delete cascade,
