@@ -1,37 +1,69 @@
 /**
- * Anthropic Claude — chamado server-side via UrlFetchApp.
- * Sem streaming (GAS não suporta SSE); retorna a resposta completa.
+ * Gemini API — chamado server-side via UrlFetchApp.
+ * Converte entrada/saída no formato Anthropic para o front-end não precisar de alterações.
  */
 function gasCallSample(params) {
   const p = PropertiesService.getScriptProperties();
-  const key = p.getProperty("ANTHROPIC_API_KEY") || "";
-  if (!key) throw new Error("ANTHROPIC_API_KEY não configurado nas Script Properties.");
+  const key = p.getProperty("GEMINI_API_KEY") || "";
+  if (!key) throw new Error("GEMINI_API_KEY não configurado nas Script Properties.");
 
-  // Força modelo padrão e remove stream (não suportado no GAS)
-  params.model    = params.model    || "claude-sonnet-4-6";
-  params.max_tokens = params.max_tokens || 4096;
-  delete params.stream;
+  // Modelo: aceita nomes Anthropic (claude-*) e mapeia para Gemini, ou usa Gemini diretamente
+  const modelRaw = params.model || "gemini-2.0-flash";
+  const model = modelRaw.startsWith("claude") ? "gemini-2.0-flash" : modelRaw;
+
+  // Converte messages (formato Anthropic) → contents (formato Gemini)
+  const contents = (params.messages || []).map(m => ({
+    role: m.role === "assistant" ? "model" : "user",
+    parts: Array.isArray(m.content)
+      ? m.content.map(c => c.type === "text" ? { text: c.text } : { text: JSON.stringify(c) })
+      : [{ text: String(m.content || "") }],
+  }));
+
+  const body = {
+    contents: contents,
+    generationConfig: {
+      maxOutputTokens: params.max_tokens || 4096,
+      temperature: params.temperature || 0.7,
+    },
+  };
+
+  // system prompt → systemInstruction
+  if (params.system) {
+    body.systemInstruction = { parts: [{ text: params.system }] };
+  }
+
+  const url = "https://generativelanguage.googleapis.com/v1beta/models/"
+    + model + ":generateContent?key=" + key;
 
   const options = {
     method: "post",
     contentType: "application/json",
-    headers: {
-      "x-api-key": key,
-      "anthropic-version": "2023-06-01",
-    },
-    payload: JSON.stringify(params),
+    payload: JSON.stringify(body),
     muteHttpExceptions: true,
   };
 
-  const resp = UrlFetchApp.fetch("https://api.anthropic.com/v1/messages", options);
+  const resp = UrlFetchApp.fetch(url, options);
   const code = resp.getResponseCode();
-  const body = JSON.parse(resp.getContentText());
+  const data = JSON.parse(resp.getContentText());
 
   if (code !== 200) {
-    throw new Error("Anthropic erro " + code + ": " + JSON.stringify(body.error || body));
+    throw new Error("Gemini erro " + code + ": " + JSON.stringify((data.error || data)));
   }
 
-  return body;
+  // Converte resposta Gemini → formato Anthropic (o front-end espera content[0].text)
+  const text = (data.candidates || [{}])[0]?.content?.parts?.map(p => p.text || "").join("") || "";
+  return {
+    id: "gemini-" + Date.now(),
+    type: "message",
+    role: "assistant",
+    model: model,
+    content: [{ type: "text", text: text }],
+    stop_reason: "end_turn",
+    usage: {
+      input_tokens:  data.usageMetadata?.promptTokenCount     || 0,
+      output_tokens: data.usageMetadata?.candidatesTokenCount || 0,
+    },
+  };
 }
 
 /** MCP dispatcher — ponto único chamado pelo shim */
